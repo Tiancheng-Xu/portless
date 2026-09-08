@@ -1256,6 +1256,7 @@ export function spawnCommand(
   options?: {
     env?: NodeJS.ProcessEnv;
     onCleanup?: () => void;
+    onExit?: (code: number | null, signal: NodeJS.Signals | null) => void | Promise<void>;
   }
 ): void {
   const env: Record<string, string | undefined> = {
@@ -1368,7 +1369,13 @@ export function spawnCommand(
       finish(128 + (SIGNAL_CODES[signal] || 15));
       return;
     }
-    finish(code ?? 1);
+    void (async () => {
+      try {
+        await options?.onExit?.(code, signal);
+      } finally {
+        finish(code ?? 1);
+      }
+    })();
   });
 }
 

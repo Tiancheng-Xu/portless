@@ -537,6 +537,16 @@ function removeRoutes(store: RouteStore, hostnames: readonly string[], ownerPid?
   }
 }
 
+async function isRouteStillServing(port: number, hostname: string): Promise<boolean> {
+  if (!(await isPortListening(port))) return false;
+  console.warn(
+    colors.yellow(
+      `Warning: command exited while ${hostname} is still listening on port ${port}. Keeping the route so portless prune can clean the orphaned server.`
+    )
+  );
+  return true;
+}
+
 /** Warn on this terminal if a route it registered will not resolve. Issue #364. */
 function reportHostsSyncHere(
   hostnames: string[],
@@ -1554,6 +1564,7 @@ async function runApp(
     )
   );
 
+  let preserveRoute = false;
   spawnCommand(commandArgs, {
     env: {
       ...process.env,
@@ -1580,11 +1591,12 @@ async function runApp(
       } catch {
         // Best-effort cleanup; non-fatal
       }
-      try {
+      if (!preserveRoute) {
         removeRoutes(store, hostnames, process.pid);
-      } catch {
-        // Lock acquisition may fail during cleanup; non-fatal
       }
+    },
+    onExit: async () => {
+      preserveRoute = await isRouteStillServing(port, hostname);
     },
   });
 }
@@ -2192,6 +2204,8 @@ When portless is killed with SIGKILL (kill -9) or crashes, child dev servers
 may survive and continue holding their ports. This command finds those orphans
 by checking routes whose owning CLI process is dead but whose port is still in
 use, then terminates them and cleans up the stale route entries.
+If a wrapped command exits while its assigned port is still serving, portless
+keeps that route for the same cleanup path and prints a warning.
 
 ${colors.bold("Usage:")}
   ${colors.cyan("portless prune")}
@@ -3653,6 +3667,7 @@ async function spawnProxiedApp(
   let env: Record<string, string | undefined>;
   let store: RouteStore | null = null;
   let hostnames: string[] = [];
+  let assignedPort: number | undefined;
   let displayUrl: string;
 
   if (usesPortless) {
@@ -3664,6 +3679,7 @@ async function spawnProxiedApp(
     });
 
     const appPort = app.appPort ?? (await findFreePort());
+    assignedPort = appPort;
     hostnames = buildHostnames(app.name, tlds);
     const urls = formatUrls(hostnames, proxyPort, tls);
     const url = urls[0]!;
@@ -3700,8 +3716,12 @@ async function spawnProxiedApp(
     } else if (signal) {
       console.error(colors.yellow(`[${app.name}] killed by ${signal}`));
     }
-    if (capturedStore && capturedHostnames.length > 0) {
-      removeRoutes(capturedStore, capturedHostnames, process.pid);
+    if (capturedStore && capturedHostnames.length > 0 && assignedPort !== undefined) {
+      void (async () => {
+        if (!(await isRouteStillServing(assignedPort!, capturedHostnames[0]!))) {
+          removeRoutes(capturedStore!, capturedHostnames, process.pid);
+        }
+      })();
     }
   });
 
