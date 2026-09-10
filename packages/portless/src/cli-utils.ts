@@ -1372,6 +1372,8 @@ export function spawnCommand(
     void (async () => {
       try {
         await options?.onExit?.(code, signal);
+      } catch {
+        // Exit hooks are best-effort and must not create unhandled rejections.
       } finally {
         finish(code ?? 1);
       }
